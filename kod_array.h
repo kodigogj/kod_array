@@ -6,19 +6,44 @@
 
 namespace kod {
 template <typename T>
-struct array_allocator;
-
-template <typename T>
-using has_destructor = std::disjunction<std::has_virtual_destructor<T>, std::conjunction<std::is_destructible<T>, std::negation<std::is_trivially_destructible<T>>>>;
-template <typename T>
-_INLINE_VAR constexpr bool has_destructor_v = has_destructor<T>::value;
-
-template <typename T>
 struct array {
-    using allocator = array_allocator<T>;
-
 private:
+    struct allocator {
+        template <bool /* unsafe */>
+        inline constexpr static void copy(T* const& ptr, const T& value) { new (ptr) T{ value }; }
+        template <>
+        inline constexpr static void copy<true>(T* const& ptr, const T& value) { memcpy(ptr, &value, sizeof(T)); }
+
+        template <bool /* unsafe */>
+        inline constexpr static void move(T* const& ptr, const T& value) { new (ptr) T{ std::move(value) }; }
+        template <>
+        inline constexpr static void move<true>(T* const& ptr, const T& value) { memcpy(ptr, &value, sizeof(T)); }
+
+        template <bool = std::disjunction_v<std::has_virtual_destructor<T>, std::conjunction<std::is_destructible<T>, std::negation<std::is_trivially_destructible<T>>>>>
+        inline constexpr static void free(T* const& data, const size_t& start, const size_t& end)
+        {
+
+            if (data) {
+                for (T* i = data + start; i <= data + end; ++i) {
+                    i->~T();
+                }
+            }
+        }
+        template <>
+        inline constexpr static void free<false>(T* const& data, const size_t& start, const size_t& end) {}
+
+        template <bool = std::disjunction_v<std::has_virtual_destructor<T>, std::conjunction<std::is_destructible<T>, std::negation<std::is_trivially_destructible<T>>>>>
+        inline constexpr static void free(T* const& data)
+        {
+            if (data)
+                data->~T();
+        }
+        template <>
+        inline constexpr static void free<false>(T* const& data) {}
+    };
+
     T* mdata{ nullptr };
+    //size_t* mcount{ nullptr }; //[3]{size, capacity, ref}
     size_t msize{ 0 }, mcapacity{ 0 };
 
 public:
@@ -26,6 +51,12 @@ public:
     inline array(size_t capacity)
         : mdata{ static_cast<T*>(malloc(sizeof(T) * capacity)) }
         , mcapacity{ mdata ? capacity : 0 }
+    {
+    }
+    inline array(const array& arg)
+        : mdata{ arg.mdata }
+        , msize{ arg.msize }
+        , mcapacity{ arg.mcapacity }
     {
     }
 
@@ -319,6 +350,9 @@ public:
         msize = mcapacity = 0;
     }
 
+    inline constexpr T* const& operator+(size_t i) const { return mdata + i; }
+    inline constexpr T* const& operator-(size_t i) const { return mdata - i; }
+
     inline constexpr T& operator[](size_t i) const
     {
         assert(i < msize);
@@ -332,32 +366,5 @@ public:
         allocator::free(mdata, 0, msize - 1);
         free(mdata);
     }
-};
-
-template <typename T>
-struct array_allocator {
-    template <bool /* unsafe */>
-    inline constexpr static void copy(T* const& ptr, const T& value) { new (ptr) T{ value }; }
-    template <>
-    inline constexpr static void copy<true>(T* const& ptr, const T& value) { memcpy(ptr, &value, sizeof(T)); }
-
-    template <bool /* unsafe */>
-    inline constexpr static void move(T* const& ptr, const T& value) { new (ptr) T{ std::move(value) }; }
-    template <>
-    inline constexpr static void move<true>(T* const& ptr, const T& value) { memcpy(ptr, &value, sizeof(T)); }
-
-    template <bool = has_destructor_v<T>>
-    inline constexpr static void free(T* const& data, const size_t& start, const size_t& end)
-    {
-        for (T* i = data + start; i <= data + end; ++i)
-            i->~T();
-    }
-    template <>
-    inline constexpr static void free<false>(T* const& data, const size_t& start, const size_t& end) {}
-
-    template <bool = has_destructor_v<T>>
-    inline constexpr static void free(T* const& data) { data->~T(); }
-    template <>
-    inline constexpr static void free<false>(T* const& data) {}
 };
 }
